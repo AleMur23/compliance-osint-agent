@@ -1,25 +1,22 @@
-# Private Compliance Agent - AML/Compliance Document & OSINT Screening
-# All processing runs locally; no PII sent to external APIs.
+# Compliance Agent – Cloud-Only MVP (Groq + Tavily)
+# Lightweight deps for VPS deployment; no local LLM.
 
-# Orchestration
+# LLM (Groq only)
 langchain>=0.3.0
 langchain-core>=0.3.0
-langchain-community>=0.3.0
+langchain-groq>=0.2.0
 
-# PDF extraction (fast, local)
+# PDF extraction
 PyMuPDF>=1.24.0
 
-# OSINT search (Tavily)
+# OSINT search
 tavily-python>=0.7.0
 
-# Structured output & validation
+# Validation
 pydantic>=2.0.0
-
-# Optional: Groq backend for fast public demos
-langchain-groq>=0.2.0
 
 # Web UI
 streamlit>=1.28.0
 
-# Env loading (.env: GROQ_API_KEY, TAVILY_API_KEY)
+# Env (.env: GROQ_API_KEY, TAVILY_API_KEY)
 python-dotenv>=1.0.0

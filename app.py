@@ -12,7 +12,7 @@ import streamlit as st
 
 from core import AdverseMediaAgent
 
-# Load .env (GROQ_API_KEY, TAVILY_API_KEY)
+# Load .env (GROQ_API_KEY, TAVILY_API_KEY) for cloud-only MVP
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -41,72 +41,45 @@ if "osint_entity_input" not in st.session_state:
     st.session_state.osint_entity_input = ""
 if "tavily_credits" not in st.session_state:
     st.session_state.tavily_credits = 280
+if "used_dummy_profile" not in st.session_state:
+    st.session_state.used_dummy_profile = False
 
-# --- Sidebar: Clear visual flow ---
-st.sidebar.title("⚙️ Engine Settings")
-
-st.sidebar.markdown("### 🧠 1. Document Extraction (LLM)")
-backend_choice = st.sidebar.radio(
-    "Backend",
-    options=[
-        "Local (Ollama - 100% Private)",
-        "Cloud Demo (Groq - Ultra Fast)",
-    ],
-    index=0,
-    key="backend_radio",
-)
-
-backend = "ollama" if "Ollama" in backend_choice else "groq"
-groq_key = os.environ.get("GROQ_API_KEY") or None
-tavily_key = (os.environ.get("TAVILY_API_KEY") or "").strip() or None
-
-if backend == "groq":
-    if not groq_key or not groq_key.strip():
-        st.sidebar.error(
-            "**Groq selected:** Set `GROQ_API_KEY` in your `.env` file to use Cloud Demo."
-        )
-    else:
-        st.sidebar.caption(
-            "⚠️ Cloud Demo sends data to Groq's API. For sensitive data use Local (Ollama)."
-        )
+# --- Sidebar ---
+st.sidebar.title("⚙️ Settings")
 
 st.sidebar.markdown(
-    "<div style='text-align: center; font-size: 24px;'>⬇️</div>",
-    unsafe_allow_html=True,
+    "🚨 **Cloud Demo (Not Air-Gapped)**: Uses public APIs (Groq & Tavily) to accommodate "
+    "server limits. **Do NOT upload real PII.** The 100% private, offline version is available "
+    "on the GitHub `main` branch."
 )
-st.sidebar.markdown("### 🌐 2. OSINT Search (Tavily)")
-st.sidebar.caption("Tavily powers web screening for adverse media. Usage is tracked below.")
+st.sidebar.markdown("---")
 
+groq_key = (os.environ.get("GROQ_API_KEY") or "").strip() or None
+tavily_key = (os.environ.get("TAVILY_API_KEY") or "").strip() or None
+
+if not groq_key:
+    st.sidebar.error("Set `GROQ_API_KEY` in your `.env` file.")
 if not tavily_key:
-    st.sidebar.error(
-        "**OSINT:** Set `TAVILY_API_KEY` in your `.env` file to run adverse media searches."
-    )
-else:
+    st.sidebar.error("Set `TAVILY_API_KEY` in your `.env` file to run OSINT searches.")
+
+if tavily_key:
     st.sidebar.metric("Tavily Credits Remaining", st.session_state.tavily_credits)
 
 def _get_agent():
-    """Build agent from current sidebar backend; uses env for Groq and Tavily."""
-    if not tavily_key:
-        raise ValueError("TAVILY_API_KEY is not set. Add it to .env for OSINT search.")
-    if backend == "groq" and not (groq_key and groq_key.strip()):
-        raise ValueError("GROQ_API_KEY is not set. Add it to .env to use Groq.")
-    return AdverseMediaAgent(
-        backend=backend,
-        groq_api_key=(groq_key or "").strip() or None,
-    )
-
-def _model_label() -> str:
-    if backend == "ollama":
-        return "Ollama (llama3.2)"
-    return "Groq"
+    """Build agent (Groq + Tavily); keys from env."""
+    return AdverseMediaAgent(groq_api_key=groq_key or None)
 
 # --- Main area ---
 st.title("Secure document handling")
-st.caption(f"Model active: **{_model_label()}**")
+st.caption("Model: **Groq (llama-3.3-70b-versatile)**")
 st.markdown("---")
 
-# ----- Step 1: Document upload & extraction (unchanged) -----
+# ----- Step 1: Document upload & extraction -----
 st.subheader("Step 1: Document upload & extraction")
+st.markdown(
+    "Upload a KYC document or test safely with our synthetic profile. "
+    "*Note: Data is processed via secure but public APIs.*"
+)
 uploaded_file = st.file_uploader(
     "Choose a PDF document",
     type=["pdf"],
@@ -114,31 +87,68 @@ uploaded_file = st.file_uploader(
     key="pdf_upload",
 )
 
+use_dummy = st.button("📄 Load 'dummy_profile.pdf' (Safe Test)", key="use_dummy_btn")
+
+def _run_extraction(pdf_bytes: bytes, *, from_dummy: bool = False) -> None:
+    """Run extraction on PDF bytes and update session state."""
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(pdf_bytes)
+            tmp_path = Path(tmp.name)
+        agent = _get_agent()
+        extracted = agent.extract_entity_from_pdf(tmp_path)
+        doc = fitz.open(tmp_path)
+        pdf_context = "\n".join(page.get_text() for page in doc).strip()
+        doc.close()
+        if not pdf_context:
+            pdf_context = "(No text could be extracted from the PDF.)"
+        st.session_state.extracted = extracted
+        st.session_state.pdf_context = pdf_context
+        st.session_state.used_dummy_profile = from_dummy
+    finally:
+        if tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+if use_dummy:
+    if not groq_key:
+        st.error("Cannot run: `GROQ_API_KEY` is not set in `.env`.")
+        st.stop()
+    dummy_path = Path("dummy_profile.pdf")
+    if not dummy_path.exists():
+        st.error("`dummy_profile.pdf` not found in the project root. Add the file to enable safe test.")
+        st.stop()
+    with st.spinner("Loading dummy profile and extracting…"):
+        try:
+            pdf_bytes = open(dummy_path, "rb").read()
+            _run_extraction(pdf_bytes, from_dummy=True)
+            st.success("✅ **Dummy profile loaded and extracted.** You can load Subject or Employer into OSINT below.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Dummy profile extraction failed: {e}")
+            st.exception(e)
+    st.stop()
+
 extract_clicked = st.button("Extract Information", type="primary", key="extract_btn")
 
 if extract_clicked:
     if uploaded_file is None:
         st.warning("Please upload a PDF file first.")
         st.stop()
-    if backend == "groq" and not (groq_key and groq_key.strip()):
-        st.error("Cannot run: Groq is selected but `GROQ_API_KEY` is not set in `.env`.")
+    if not groq_key:
+        st.error("Cannot run: `GROQ_API_KEY` is not set in `.env`.")
         st.stop()
 
-    tmp_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-            tmp.write(uploaded_file.getvalue())
-            tmp_path = Path(tmp.name)
-
         with st.spinner("Extracting structured information…"):
             try:
-                agent = _get_agent()
-                extracted = agent.extract_entity_from_pdf(tmp_path)
-                doc = fitz.open(tmp_path)
-                pdf_context = "\n".join(page.get_text() for page in doc).strip()
-                doc.close()
-                if not pdf_context:
-                    pdf_context = "(No text could be extracted from the PDF.)"
+                _run_extraction(uploaded_file.getvalue(), from_dummy=False)
+                st.session_state.used_dummy_profile = False
+                st.success("Information extracted. You can load Subject or Employer into OSINT below.")
+                st.rerun()
             except ValueError as e:
                 st.error(str(e))
                 st.stop()
@@ -146,18 +156,6 @@ if extract_clicked:
                 st.error(f"Extraction failed: {e}")
                 st.exception(e)
                 st.stop()
-            finally:
-                if tmp_path and tmp_path.exists():
-                    try:
-                        tmp_path.unlink()
-                    except OSError:
-                        pass
-
-        st.session_state.extracted = extracted
-        st.session_state.pdf_context = pdf_context
-        st.success("Information extracted. You can load Subject or Employer into OSINT below.")
-        st.rerun()
-
     except Exception as e:
         st.error(f"An error occurred: {e}")
         raise
@@ -165,6 +163,8 @@ if extract_clicked:
 # Show extracted fields when Step 1 is complete
 if st.session_state.extracted:
     ex = st.session_state.extracted
+    if st.session_state.used_dummy_profile:
+        st.info("📄 **Using synthetic profile:** *dummy_profile.pdf* (safe test data).")
     st.markdown("#### Extracted information")
     col1, col2 = st.columns(2)
     with col1:
@@ -213,8 +213,8 @@ if run_osint_clicked:
     if not tavily_key:
         st.error("TAVILY_API_KEY is not set. Add it to .env to run OSINT.")
         st.stop()
-    if backend == "groq" and not (groq_key and groq_key.strip()):
-        st.error("Groq is selected but GROQ_API_KEY is not set in .env.")
+    if not groq_key:
+        st.error("GROQ_API_KEY is not set. Add it to .env to run OSINT.")
         st.stop()
 
     try:

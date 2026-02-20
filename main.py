@@ -1,8 +1,8 @@
 """
-Private Compliance Agent – Entry point.
+Compliance Agent – CLI entry point (Cloud-Only MVP).
 
-Orchestrates the adverse media pipeline: PDF entity extraction,
-OSINT search, and LLM-based risk report. All processing is local.
+Orchestrates the adverse media pipeline: PDF extraction (Groq),
+OSINT search (Tavily), and LLM-based risk report.
 """
 
 import os
@@ -39,15 +39,17 @@ def main() -> None:
         print("Please add the target PDF to this directory or set PDF_PATH.", file=sys.stderr)
         sys.exit(1)
 
-    print("Initializing Adverse Media Agent (local LLM)...")
+    print("Initializing Adverse Media Agent (Groq + Tavily)...")
     agent = AdverseMediaAgent()
 
     print("\n[1/3] Extracting entity from PDF...")
-    entity_name = agent.extract_entity_from_pdf(PDF_PATH)
+    extracted = agent.extract_entity_from_pdf(PDF_PATH)
+    entity_name = extracted.get("subject_name", "")
     print(f"      Entity identified: {entity_name}")
 
     print("\n[2/3] Searching OSINT sources for adverse media...")
-    search_results = agent.search_adverse_media(entity_name)
+    search_data = agent.search_adverse_media(entity_name)
+    search_results = search_data.get("results", [])
     print(f"      Retrieved {len(search_results)} result(s).")
 
     pdf_context = load_pdf_context(PDF_PATH)

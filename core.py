@@ -1,8 +1,8 @@
 """
-Private Compliance Agent – Core module.
+Compliance Agent – Core module (Cloud-Only MVP).
 
-Local document extraction and automated OSINT Adverse Media screening.
-Supports dual LLM backends: Ollama (local/on-prem) and Groq (fast public demos).
+Document extraction via Groq and OSINT adverse media screening via Tavily.
+No local LLM; designed for lightweight VPS deployment.
 """
 
 import json
@@ -17,7 +17,6 @@ from urllib.error import HTTPError, URLError
 import fitz
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
-from langchain_community.llms import Ollama
 from langchain_groq import ChatGroq
 from pydantic import BaseModel, Field
 from tavily import TavilyClient
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def _llm_response_text(response: Any) -> str:
-    """Extract plain text from LLM response (Ollama returns str, ChatGroq returns AIMessage)."""
+    """Extract plain text from LLM response (ChatGroq returns AIMessage)."""
     if hasattr(response, "content"):
         return (response.content or "").strip()
     return (response or "").strip()
@@ -43,30 +42,19 @@ class ExtractedEntity(BaseModel):
 
 class AdverseMediaAgent:
     """
-    Agent for adverse media screening: PDF entity extraction, OSINT search,
-    and local LLM-based risk analysis. All processing stays on-premises.
+    Agent for adverse media screening: PDF extraction (Groq) and OSINT search (Tavily).
+    Cloud-only; no local LLM.
     """
 
-    def __init__(
-        self,
-        backend: str = "ollama",
-        groq_api_key: str | None = None,
-        model_name: str = "llama3.2",
-        base_url: str = "http://localhost:11434",
-        **ollama_kwargs: Any,
-    ) -> None:
+    GROQ_MODEL = "llama-3.3-70b-versatile"
+
+    def __init__(self, groq_api_key: str | None = None) -> None:
         """
-        Initialize the agent with either a local Ollama LLM or Groq.
+        Initialize the agent with Groq (extraction + risk analysis) and Tavily (OSINT).
 
         Args:
-            backend: "ollama" for local inference, "groq" for Groq API.
-            groq_api_key: API key for Groq (required if backend=="groq");
-                can also be set via GROQ_API_KEY env var.
-            model_name: Ollama model (e.g. 'llama3.2'); used only when backend=="ollama".
-            base_url: Ollama API base URL; used only when backend=="ollama".
-            **ollama_kwargs: Optional kwargs for Ollama (e.g. temperature).
+            groq_api_key: API key for Groq; can also be set via GROQ_API_KEY env var.
         """
-        # Tavily OSINT client (required for search_adverse_media)
         tavily_key = os.environ.get("TAVILY_API_KEY")
         if not tavily_key or not str(tavily_key).strip():
             raise ValueError(
@@ -74,38 +62,14 @@ class AdverseMediaAgent:
             )
         self.tavily_client = TavilyClient(api_key=tavily_key.strip())
 
-        self.backend = backend
-        if backend == "ollama":
-            self.model_name = model_name
-            self.llm = Ollama(
-                model=model_name,
-                base_url=base_url,
-                **ollama_kwargs,
-            )
-            logger.info(
-                "AdverseMediaAgent initialized with backend=ollama, model=%s, base_url=%s",
-                model_name,
-                base_url,
-            )
-        elif backend == "groq":
-            api_key = groq_api_key or os.environ.get("GROQ_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "Groq backend requires groq_api_key or GROQ_API_KEY environment variable."
-                )
-            self.model_name = "llama-3.3-70b-versatile"
-            self.llm = ChatGroq(
-                model=self.model_name,
-                api_key=api_key,
-            )
-            logger.info(
-                "AdverseMediaAgent initialized with backend=groq, model=%s",
-                self.model_name,
-            )
-        else:
+        api_key = groq_api_key or os.environ.get("GROQ_API_KEY")
+        if not api_key or not str(api_key).strip():
             raise ValueError(
-                f'backend must be "ollama" or "groq", got: {backend!r}'
+                "GROQ_API_KEY is required. Set it in your environment or .env file."
             )
+        self.model_name = self.GROQ_MODEL
+        self.llm = ChatGroq(model=self.model_name, api_key=api_key.strip())
+        logger.info("AdverseMediaAgent initialized (Groq + Tavily), model=%s", self.model_name)
 
     def extract_entity_from_pdf(self, pdf_path: str | Path) -> dict[str, str]:
         """
@@ -266,7 +230,7 @@ Output ONLY valid JSON with the four keys. No markdown, no code fences, no expla
     ) -> str:
         """
         Compare PDF context with OSINT search results and produce an
-        Adverse Media Report via the local LLM (Senior AML Investigator role).
+        Adverse Media Report via the LLM (Senior AML Investigator role).
 
         Args:
             entity_name: Name of the screened entity.
