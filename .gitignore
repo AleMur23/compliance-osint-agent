@@ -16,6 +16,9 @@ __pycache__/
 .streamlit/
 *.pdf
 
+# Runtime (persistent API counter for demo limit)
+api_usage.json
+
 # OS
 .DS_Store
 Thumbs.db

@@ -10,6 +10,11 @@ from pathlib import Path
 import fitz
 import streamlit as st
 
+from api_usage import (
+    MAX_GLOBAL_REQUESTS,
+    get_global_api_count,
+    increment_global_api_count,
+)
 from core import AdverseMediaAgent
 
 # Load .env (GROQ_API_KEY, TAVILY_API_KEY) for cloud-only MVP
@@ -52,6 +57,13 @@ st.sidebar.markdown(
     "server limits. **Do NOT upload real PII.** The 100% private, offline version is available "
     "on the GitHub `main` branch."
 )
+global_api_count = get_global_api_count()
+limit_reached = global_api_count >= MAX_GLOBAL_REQUESTS
+st.sidebar.caption(f"**Global API Usage:** {global_api_count}/{MAX_GLOBAL_REQUESTS} requests")
+if limit_reached:
+    st.sidebar.error(
+        "Demo limit reached. Run the app locally from the GitHub repo for unlimited use."
+    )
 st.sidebar.markdown("---")
 
 groq_key = (os.environ.get("GROQ_API_KEY") or "").strip() or None
@@ -74,6 +86,13 @@ st.title("Secure document handling")
 st.caption("Model: **Groq (llama-3.3-70b-versatile)**")
 st.markdown("---")
 
+if limit_reached:
+    st.error(
+        "**Demo limit reached.** The global API request limit has been reached. "
+        "To continue, run the app locally from the GitHub repository (no limit when self-hosted)."
+    )
+    st.markdown("---")
+
 # ----- Step 1: Document upload & extraction -----
 st.subheader("Step 1: Document upload & extraction")
 st.markdown(
@@ -87,7 +106,11 @@ uploaded_file = st.file_uploader(
     key="pdf_upload",
 )
 
-use_dummy = st.button("📄 Load 'dummy_profile.pdf' (Safe Test)", key="use_dummy_btn")
+use_dummy = st.button(
+    "📄 Load 'dummy_profile.pdf' (Safe Test)",
+    key="use_dummy_btn",
+    disabled=limit_reached,
+)
 
 def _run_extraction(pdf_bytes: bytes, *, from_dummy: bool = False) -> None:
     """Run extraction on PDF bytes and update session state."""
@@ -114,6 +137,8 @@ def _run_extraction(pdf_bytes: bytes, *, from_dummy: bool = False) -> None:
                 pass
 
 if use_dummy:
+    if limit_reached:
+        st.stop()
     if not groq_key:
         st.error("Cannot run: `GROQ_API_KEY` is not set in `.env`.")
         st.stop()
@@ -123,6 +148,7 @@ if use_dummy:
         st.stop()
     with st.spinner("Loading dummy profile and extracting…"):
         try:
+            increment_global_api_count()
             pdf_bytes = open(dummy_path, "rb").read()
             _run_extraction(pdf_bytes, from_dummy=True)
             st.success("✅ **Dummy profile loaded and extracted.** You can load Subject or Employer into OSINT below.")
@@ -132,9 +158,16 @@ if use_dummy:
             st.exception(e)
     st.stop()
 
-extract_clicked = st.button("Extract Information", type="primary", key="extract_btn")
+extract_clicked = st.button(
+    "Extract Information",
+    type="primary",
+    key="extract_btn",
+    disabled=limit_reached,
+)
 
 if extract_clicked:
+    if limit_reached:
+        st.stop()
     if uploaded_file is None:
         st.warning("Please upload a PDF file first.")
         st.stop()
@@ -145,6 +178,7 @@ if extract_clicked:
     try:
         with st.spinner("Extracting structured information…"):
             try:
+                increment_global_api_count()
                 _run_extraction(uploaded_file.getvalue(), from_dummy=False)
                 st.session_state.used_dummy_profile = False
                 st.success("Information extracted. You can load Subject or Employer into OSINT below.")
@@ -203,9 +237,16 @@ st.text_input(
     placeholder="e.g. Person or company name",
 )
 
-run_osint_clicked = st.button("Run OSINT Search", type="primary", key="run_osint")
+run_osint_clicked = st.button(
+    "Run OSINT Search",
+    type="primary",
+    key="run_osint",
+    disabled=limit_reached,
+)
 
 if run_osint_clicked:
+    if limit_reached:
+        st.stop()
     entity_to_search = (st.session_state.get("osint_entity_input") or "").strip()
     if not entity_to_search:
         st.warning("Enter an entity name to search for adverse media.")
@@ -226,6 +267,7 @@ if run_osint_clicked:
     with st.status("Running OSINT and risk analysis…", expanded=True) as status:
         st.write(f"**1. Searching adverse media for: {entity_to_search}**")
         try:
+            increment_global_api_count()
             search_data = agent.search_adverse_media(entity_to_search)
             st.session_state.tavily_credits -= 1
             st.write(f"✓ Found **{len(search_data['results'])}** result(s), **{len(search_data.get('images', []))}** image(s)")
